@@ -1,0 +1,79 @@
+name: Reels yayinla
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: reels-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Vakti gelen videolari yayinla
+        env:
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          npm install firebase-admin@12 --silent
+          cat > publish.js <<'EOF'
+          const admin = require('firebase-admin');
+          const { IG_USER_ID, IG_ACCESS_TOKEN, FIREBASE_SERVICE_ACCOUNT } = process.env;
+          if (!IG_USER_ID || !IG_ACCESS_TOKEN || !FIREBASE_SERVICE_ACCOUNT) {
+            console.log('Gerekli secret degerleri eksik, cikiliyor.');
+            process.exit(0);
+          }
+          admin.initializeApp({ credential: admin.credential.cert(JSON.parse(FIREBASE_SERVICE_ACCOUNT)) });
+          const db = admin.firestore();
+          const G = 'https://graph.facebook.com/v21.0';
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+          async function api(path, method, params) {
+            const body = new URLSearchParams({ ...params, access_token: IG_ACCESS_TOKEN });
+            const r = method === 'GET'
+              ? await fetch(G + path + '?' + body)
+              : await fetch(G + path, { method, body });
+            const j = await r.json();
+            if (j.error) throw new Error(j.error.message);
+            return j;
+          }
+
+          async function publish(d) {
+            const c = await api('/' + IG_USER_ID + '/media', 'POST', {
+              media_type: 'REELS', video_url: d.videoUrl, caption: d.cap || ''
+            });
+            for (let i = 0; i < 30; i++) {
+              const s = await api('/' + c.id, 'GET', { fields: 'status_code' });
+              if (s.status_code === 'FINISHED') break;
+              if (s.status_code === 'ERROR' || s.status_code === 'EXPIRED') {
+                throw new Error('Video islenemedi: ' + s.status_code);
+              }
+              if (i === 29) throw new Error('Video isleme zaman asimi');
+              await sleep(10000);
+            }
+            return api('/' + IG_USER_ID + '/media_publish', 'POST', { creation_id: c.id });
+          }
+
+          (async () => {
+            const snap = await db.collection('queue').where('status', '==', 'bekliyor').get();
+            const due = snap.docs.filter(x => !x.data().islemde && x.data().whenMs <= Date.now());
+            for (const x of due) {
+              await x.ref.update({ islemde: true });
+              try {
+                const r = await publish(x.data());
+                await x.ref.update({ status: 'yayinlandi', igId: r.id });
+              } catch (e) {
+                await x.ref.update({ status: 'hata', err: e.message });
+              }
+            }
+            console.log('Bitti. Islenen kayit:', due.length);
+          })();
+          EOF
+          node publish.js
