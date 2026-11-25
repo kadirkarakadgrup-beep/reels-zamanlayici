@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Reels Zamanlayıcı</title>
+<style>
+:root{--bg:#f5f4f0;--card:#fff;--tx:#1d1d1f;--mu:#6b6b70;--bd:#e3e1db;--ac:#d6249f;--ac2:#fff;--ok:#1f8a4c;--wa:#b26a00;--er:#c0362c;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121214;--card:#1c1c1f;--tx:#f1f1f3;--mu:#9a9aa2;--bd:#2f2f34;--ac:#ff5cc0;--ac2:#1a0a14;--ok:#4cc784;--wa:#f0a63a;--er:#ff7b70;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:560px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:4px 0 2px}
+.sub{color:var(--mu);font-size:14px;margin:0 0 14px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:14px;margin-bottom:14px}
+.warn{color:var(--wa);font-size:13px;display:none}
+label{display:block;font-size:13px;color:var(--mu);margin:12px 0 5px}
+input[type=file],input[type=datetime-local],textarea{width:100%;font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:10px;padding:10px}
+textarea{min-height:96px;resize:vertical}
+video{width:100%;max-height:260px;border-radius:10px;background:#000;margin-top:10px;display:none}
+.meta{font-size:12px;color:var(--mu);margin-top:6px}
+.btn{width:100%;margin-top:14px;padding:13px;border:0;border-radius:12px;background:var(--ac);color:var(--ac2);font:600 16px system-ui,sans-serif;cursor:pointer}
+.btn:disabled{opacity:.45}
+.tabs{display:flex;gap:6px;margin-bottom:10px}
+.tab{flex:1;padding:8px;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--tx);font:inherit;font-size:14px;cursor:pointer}
+.tab.on{background:var(--ac);color:var(--ac2);border-color:var(--ac)}
+.item{border-top:1px solid var(--bd);padding:12px 0}
+.item:first-child{border-top:0}
+.row{display:flex;justify-content:space-between;gap:8px;align-items:center}
+.fn{font-weight:600;word-break:break-all}
+.cap{color:var(--mu);font-size:14px;margin:4px 0;white-space:pre-wrap;word-break:break-word}
+.chip{font-size:12px;padding:2px 9px;border-radius:99px;border:1px solid currentColor;white-space:nowrap}
+.bekliyor{color:var(--wa)}.yayinlandi{color:var(--ok)}.hata{color:var(--er)}
+.del{background:none;border:0;color:var(--er);font:inherit;font-size:13px;cursor:pointer;padding:4px 0}
+.empty{color:var(--mu);text-align:center;padding:18px 0;font-size:14px}
+</style>
+</head>
+<body>
+<main>
+<h1>🎬 Reels Zamanlayıcı</h1>
+<p class="sub">Hazır videoları tarih ve saat seçip sıraya al.</p>
+
+<div class="card">
+  <div class="warn" id="cfgw">Cloudinary ayarı eksik: dosyanın başındaki CLOUD_NAME ve UPLOAD_PRESET satırlarını doldur.</div>
+  <label for="vid">Video (mp4 / mov)</label>
+  <input id="vid" type="file" accept="video/mp4,video/quicktime,video/*">
+  <video id="pv" controls playsinline></video>
+  <div class="meta" id="vm"></div>
+
+  <label for="cap">Açıklama <span id="cc" style="float:right">0 / 2200</span></label>
+  <textarea id="cap" maxlength="2200" placeholder="Açıklama ve hashtagler"></textarea>
+
+  <label for="when">Yayın zamanı</label>
+  <input id="when" type="datetime-local">
+
+  <button class="btn" id="add" disabled>Sıraya ekle</button>
+</div>
+
+<div class="tabs">
+  <button class="tab on" data-f="all">Tümü</button>
+  <button class="tab" data-f="bekliyor">Bekleyen</button>
+  <button class="tab" data-f="yayinlandi">Yayınlanan</button>
+</div>
+<div class="card" id="list"><div class="empty">Yükleniyor…</div></div>
+</main>
+
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {getFirestore,collection,addDoc,onSnapshot,deleteDoc,doc,query,orderBy,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const CLOUD_NAME="hptbxdfx";         // Cloudinary cloud name
+const UPLOAD_PRESET="reels_unsigned"; // Cloudinary unsigned upload preset
+
+const firebaseConfig={
+  apiKey:"AIzaSyCMAvj3ACJ3U-9EuR4tpIX-vMEoOFeZ8gg",
+  authDomain:"reels-zamanlayici.firebaseapp.com",
+  projectId:"reels-zamanlayici",
+  storageBucket:"reels-zamanlayici.firebasestorage.app",
+  messagingSenderId:"832475169874",
+  appId:"1:832475169874:web:45de5021a0267f055e4b8b"
+};
+const db=getFirestore(initializeApp(firebaseConfig));
+const col=collection(db,"queue");
+
+const $=id=>document.getElementById(id);
+let items=[],filter="all",cur=null,file=null,busy=false;
+const esc=s=>{const d=document.createElement("div");d.textContent=s||"";return d.innerHTML};
+const fmtSize=b=>b>1048576?(b/1048576).toFixed(1)+" MB":Math.round(b/1024)+" KB";
+const fmtDur=s=>{s=Math.round(s);return Math.floor(s/60)+":"+("0"+(s%60)).slice(-2)};
+const fmtWhen=ms=>new Date(ms).toLocaleString("tr-TR",{day:"2-digit",month:"long",hour:"2-digit",minute:"2-digit"});
+const p2=n=>("0"+n).slice(-2);
+function defWhen(){const d=new Date();d.setHours(d.getHours()+1,0,0,0);return d.getFullYear()+"-"+p2(d.getMonth()+1)+"-"+p2(d.getDate())+"T"+p2(d.getHours())+":"+p2(d.getMinutes())}
+function check(){$("add").disabled=busy||!(cur&&$("when").value&&CLOUD_NAME&&UPLOAD_PRESET)}
+if(!CLOUD_NAME||!UPLOAD_PRESET)$("cfgw").style.display="block";
+$("when").value=defWhen();
+
+$("cap").addEventListener("input",e=>{$("cc").textContent=e.target.value.length+" / 2200"});
+$("when").addEventListener("input",check);
+$("vid").addEventListener("change",e=>{
+  file=e.target.files[0];cur=null;const pv=$("pv");
+  if(!file){pv.style.display="none";$("vm").textContent="";check();return}
+  cur={name:file.name,size:file.size,dur:0};
+  pv.src=URL.createObjectURL(file);pv.style.display="block";
+  pv.onloadedmetadata=()=>{cur.dur=pv.duration;$("vm").textContent=fmtSize(cur.size)+" · "+fmtDur(cur.dur)};
+  $("vm").textContent=fmtSize(file.size);check();
+});
+
+function upload(f,onp){return new Promise((res,rej)=>{
+  const x=new XMLHttpRequest();
+  x.open("POST","https://api.cloudinary.com/v1_1/"+CLOUD_NAME+"/video/upload");
+  x.upload.onprogress=e=>{if(e.lengthComputable)onp(e.loaded/e.total)};
+  x.onload=()=>{try{const j=JSON.parse(x.responseText);x.status<300?res(j):rej(new Error((j.error&&j.error.message)||"Yükleme hatası"))}catch(e){rej(e)}};
+  x.onerror=()=>rej(new Error("Ağ hatası"));
+  const fd=new FormData();fd.append("file",f);fd.append("upload_preset",UPLOAD_PRESET);x.send(fd);
+})}
+
+$("add").addEventListener("click",async()=>{
+  if(!cur||!file)return;
+  busy=true;const btn=$("add");btn.disabled=true;
+  try{
+    const j=await upload(file,p=>{btn.textContent="Yükleniyor %"+Math.round(p*100)});
+    btn.textContent="Kaydediliyor…";
+    await addDoc(col,{name:cur.name,size:cur.size,dur:cur.dur,cap:$("cap").value.trim(),
+      whenMs:new Date($("when").value).getTime(),status:"bekliyor",
+      videoUrl:j.secure_url,publicId:j.public_id,createdAt:serverTimestamp()});
+    file=null;cur=null;$("vid").value="";$("pv").style.display="none";$("pv").removeAttribute("src");
+    $("vm").textContent="";$("cap").value="";$("cc").textContent="0 / 2200";$("when").value=defWhen();
+  }catch(e){alert("Hata: "+e.message)}
+  busy=false;btn.textContent="Sıraya ekle";check();
+});
+
+document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click",()=>{
+  filter=t.dataset.f;document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("on",x===t));render();
+}));
+$("list").addEventListener("click",async e=>{
+  const b=e.target.closest(".del");if(!b)return;
+  if(confirm("Bu kayıt silinsin mi?"))try{await deleteDoc(doc(db,"queue",b.dataset.id))}catch(err){alert("Hata: "+err.message)}
+});
+
+function render(){
+  const L=items.filter(i=>filter==="all"||i.status===filter);
+  if(!L.length){$("list").innerHTML='<div class="empty">Henüz kayıt yok.</div>';return}
+  const now=Date.now();
+  $("list").innerHTML=L.map(i=>{
+    const late=i.status==="bekliyor"&&i.whenMs<now;
+    const lbl=i.status==="bekliyor"?(late?"Sırada":"Bekliyor"):(i.status==="yayinlandi"?"Yayınlandı":"Hata");
+    return '<div class="item"><div class="row"><span class="fn">'+esc(i.name)+'</span><span class="chip '+i.status+'">'+lbl+'</span></div>'+
+      '<div class="meta">'+fmtWhen(i.whenMs)+" · "+fmtSize(i.size)+(i.dur?" · "+fmtDur(i.dur):"")+"</div>"+
+      (i.cap?'<div class="cap">'+esc(i.cap)+"</div>":"")+
+      (i.err?'<div class="cap" style="color:var(--er)">'+esc(i.err)+"</div>":"")+
+      '<button class="del" data-id="'+i.id+'">Sil</button></div>';
+  }).join("");
+}
+onSnapshot(query(col,orderBy("whenMs")),s=>{items=s.docs.map(d=>({id:d.id,...d.data()}));render()},
+  e=>{$("list").innerHTML='<div class="empty">Bağlantı hatası: '+esc(e.message)+"</div>"});
+check();
+</script>
+</body>
+</html>
